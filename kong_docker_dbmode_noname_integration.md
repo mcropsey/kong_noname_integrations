@@ -332,6 +332,14 @@ docker ps
 The `kong` line should show image `kong-noname:3.9.4` and status `Up ... (healthy)`. `kong-db` should still be `Up`.
 
 ```bash
+curl -s localhost:8001/plugins
+```
+
+The output is one long line of JSON. Look for `"name":"nonamesecurity"` and `"enabled":true` in it. If you see `{"data":[],"next":null}`, the plugin isn't turned on: go back to Step 9c.
+
+*Optional:* to print just the plugin names and whether each one is on, pipe the output through `python3` instead:
+
+```bash
 curl -s localhost:8001/plugins | python3 -c 'import json,sys; [print(p["name"], p["enabled"]) for p in json.load(sys.stdin)["data"]]'
 ```
 
