@@ -281,11 +281,15 @@ plugins:
 
 If a line came out wrong, open the file again, move to that line, press `0` to jump to the start of the line, then `x` to delete an extra space, or `i` and the spacebar to add one. Step 9 checks the file before anything changes, so a mistake here gets caught.
 
+Saving `kong.yml` doesn't turn the plugin on yet. That happens in Step 9c.
+
 If you'd rather turn NoName on for only one service, put the `plugins:` block under that service instead (indented to line up with the service's `routes:`), not at the left edge.
 
-## Step 9: Check and push kong.yml (Kong host)
+## Step 9: Turn the plugin on with `apply` (Kong host)
 
-Check the file against the running Kong:
+> **The plugin is not on until you run `apply` in 9c.** Editing `kong.yml` changes only the file. `validate` and `diff` only read and check, and they don't change Kong. Until `apply` runs, Kong ignores `nonamesecurity` and the integration never comes online in the API Security UI.
+
+### 9a. Check the file (doesn't change anything)
 
 ```bash
 /opt/kong/kong-apply.sh validate
@@ -293,7 +297,7 @@ Check the file against the running Kong:
 
 This must succeed. It only works now that Kong is running the new image. On the old image, it fails because Kong doesn't know `nonamesecurity`. That's the reason for the order of Steps 7 and 8.
 
-Preview the change:
+### 9b. Preview the change (doesn't change anything)
 
 ```bash
 /opt/kong/kong-apply.sh diff
@@ -301,13 +305,21 @@ Preview the change:
 
 It should show one plugin, `nonamesecurity`, being created, and nothing else: `Created: 1  Updated: 0  Deleted: 0`. **If it shows anything else being deleted or updated, stop** and find out why before you apply.
 
-Push it:
+### 9c. Apply: this is the step that turns the plugin on
 
 ```bash
 /opt/kong/kong-apply.sh apply
 ```
 
-This saves a backup of the current Kong state to `~/kong-backups/`, then pushes `kong.yml`. No restart is needed: Kong picks up the change within about 5 seconds.
+**Don't skip this.** It saves a backup of the current Kong state to `~/kong-backups/`, then pushes `kong.yml` into Kong. No restart is needed: Kong picks up the change within about 5 seconds.
+
+Confirm it went through:
+
+```bash
+/opt/kong/kong-apply.sh diff
+```
+
+It should now show `Created: 0  Updated: 0  Deleted: 0`. **If it still says `Created: 1`, the apply didn't happen.** Run `/opt/kong/kong-apply.sh apply` again and read its output for errors.
 
 ## Step 10: Check that it works (Kong host)
 
@@ -410,4 +422,5 @@ If the plugin needs to be off right now, step 1 alone does it: within about 5 se
 | Stock Kong won't start after a rollback, and `docker logs kong` shows `nonamesecurity plugin is in use but not enabled` | You switched images before removing the plugin. Run `/opt/kong/run-kong.sh` (back on `kong-noname`), then do the Rollback steps in order. |
 | Rate limiting stopped working | `bundled` is missing from `KONG_PLUGINS` in the script. |
 | `docker logs` shows `[NONAME]` errors | Kong can't reach the NoName engine, or the zip doesn't match your integration. Download the zip again. |
+| Integration never comes online. `/plugins/enabled` lists `nonamesecurity`, but `curl -s localhost:8001/plugins` doesn't, and `kong-apply.sh diff` still says `Created: 1` | Step 9c (`apply`) was never run. The plugin is in `kong.yml` but not in Kong. Run `/opt/kong/kong-apply.sh apply`. |
 | Nothing shows up in the UI | Check that `curl -s localhost:8001/plugins` lists `nonamesecurity`, and that your traffic actually goes through this Kong. |
