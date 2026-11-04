@@ -122,13 +122,13 @@ chmod 600 ~/kong-before.json
 
 The `chmod` matters: in DB mode the `inspect` output includes the database password, so keep the file private.
 
-Check whether a start script already exists:
+Check whether a start script already exists. **On a host set up with the DB-mode install guide (like .91), it won't exist yet, and that's normal.** That guide starts Kong with a plain `docker run` command and never creates a start script.
 
 ```bash
 ls -la /opt/kong/run-kong.sh
 ```
 
-- **`No such file or directory`** is normal. It means Kong was started by hand with a `docker run` command. vi creates the file in the next step. Use `~/kong-before.json` to make sure the new script has the same ports and settings as the old container.
+- **If you see `ls: cannot access '/opt/kong/run-kong.sh': No such file or directory`,** that's the normal case. Nothing is wrong and there's nothing to back up. vi creates the file in the next step.
 - **If the file exists,** back it up first with `cp /opt/kong/run-kong.sh /opt/kong/run-kong.sh.bak`. When you open it in vi, type `:%d` and press Enter to clear the old contents before you paste the new ones.
 
 Create the script:
@@ -207,7 +207,13 @@ What the main options do:
 
 There's no `kong.yml` mount and no `KONG_DECLARATIVE_CONFIG` here. Those are for DB-less mode. In DB mode, Kong gets its config from Postgres, and decK keeps Postgres matching `kong.yml`.
 
-This script matches the original container on this host. If your old container used other ports or `-e` settings, look for them in `~/kong-before.json` (under `Env` and `PortBindings`) and add them to the script.
+This script matches the original container on this host. To double-check, print the old container's settings from `~/kong-before.json` (the password line is left out on purpose):
+
+```bash
+python3 -c 'import json; c=json.load(open("/home/mcropsey/kong-before.json"))[0]; print("\n".join(e for e in c["Config"]["Env"] if e.startswith("KONG_") and "PASSWORD" not in e)); print(c["HostConfig"]["PortBindings"]); print(c["HostConfig"]["NetworkMode"])'
+```
+
+The `KONG_*` settings should match the script's `-e` lines, except `KONG_PLUGINS`, which is new. The ports should be 80, 8000, and 8001, and the network should be `kongnet`. If your old container had other ports or `-e` settings, add them to the script.
 
 ## Step 7: Restart Kong on the new image (Kong host)
 
