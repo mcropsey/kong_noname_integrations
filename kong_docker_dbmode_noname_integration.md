@@ -207,7 +207,9 @@ What the main options do:
 
 There's no `kong.yml` mount and no `KONG_DECLARATIVE_CONFIG` here. Those are for DB-less mode. In DB mode, Kong gets its config from Postgres, and decK keeps Postgres matching `kong.yml`.
 
-This script matches the original container on this host. To double-check, print the old container's settings from `~/kong-before.json` (the password line is left out on purpose):
+This script matches a Kong set up with the DB-mode install guide, so on a host like .91 you can go straight to Step 7.
+
+**Optional: compare with the old container.** This check changes nothing. It's only worth running if the old Kong was started some other way, with extra ports, custom `-e` settings, or a network other than `kongnet`. It prints the old container's settings from `~/kong-before.json` (the password line is left out on purpose):
 
 ```bash
 python3 -c 'import json; c=json.load(open("/home/mcropsey/kong-before.json"))[0]; print("\n".join(e for e in c["Config"]["Env"] if e.startswith("KONG_") and "PASSWORD" not in e)); print(c["HostConfig"]["PortBindings"]); print(c["HostConfig"]["NetworkMode"])'
