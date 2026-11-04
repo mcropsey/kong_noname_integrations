@@ -32,22 +32,21 @@ Log in to the Kong host:
 
 ```bash
 ssh mcropsey@192.168.1.91
-cd ~/noname-security-kong-policy
 ```
 
-The plugin itself is in `kong/plugins/nonamesecurity`. The rest of the zip isn't needed. Copy just the plugin files into the build folder:
+The plugin itself is in `~/noname-security-kong-policy/kong/plugins/nonamesecurity`. The rest of the zip isn't needed. Copy just the plugin files into the build folder. The commands use full paths, so they work from any directory:
 
 ```bash
 sudo rm -rf /opt/kong/build/nonamesecurity
 sudo mkdir -p /opt/kong/build/nonamesecurity
-sudo cp -r kong/plugins/nonamesecurity/* /opt/kong/build/nonamesecurity/
+sudo cp -r ~/noname-security-kong-policy/kong/plugins/nonamesecurity/. /opt/kong/build/nonamesecurity/
 sudo chmod -R a+rX /opt/kong/build/nonamesecurity
 ls -la /opt/kong/build/nonamesecurity
 ```
 
 The `rm -rf` clears out anything left from an earlier attempt, so only the plugin files end up in the build folder.
 
-The `chmod` makes the files readable by everyone, so the `kong` user inside the container can read them. The `ls` should show `handler.lua` and `schema.lua`.
+The `chmod` makes the files readable by everyone, so the `kong` user inside the container can read them. The `ls` must show six files: `batch_queue.lua`, `configuration.lua`, `handler.lua`, `prevention.lua`, `schema.lua`, and `utils.lua`. If the folder is empty, the `cp` failed (usually `cannot stat ... No such file or directory`), so check that Step 2 put the folder in your home directory. Don't go on to Step 4 with an empty folder.
 
 ## Step 4: Create the Dockerfile (Kong host)
 
@@ -88,7 +87,7 @@ Check that the plugin made it into the image:
 sudo docker run --rm kong-noname:3.9.4 ls /usr/local/share/lua/5.1/kong/plugins/nonamesecurity
 ```
 
-This starts a throwaway container, lists the plugin folder, then deletes the container. You should see `handler.lua` and `schema.lua`. Your running Kong isn't touched.
+This starts a throwaway container, lists the plugin folder, then deletes the container. You should see the same six `.lua` files from Step 3. Your running Kong isn't touched.
 
 ## Step 6: Add the plugin to kong.yml (Kong host)
 
@@ -185,12 +184,19 @@ docker rm -f kong
 docker run -d --name kong \
   --restart unless-stopped \
   -p 80:8000 \
+  -p 8000:8000 \
   -p 8001:8001 \
   -v /opt/kong/kong.yml:/etc/kong/kong.yml:ro \
   -e KONG_DATABASE=off \
   -e KONG_DECLARATIVE_CONFIG=/etc/kong/kong.yml \
   -e KONG_PROXY_LISTEN=0.0.0.0:8000 \
   -e KONG_ADMIN_LISTEN=0.0.0.0:8001 \
+  -e KONG_PROXY_ACCESS_LOG=/dev/stdout \
+  -e KONG_ADMIN_ACCESS_LOG=/dev/stdout \
+  -e KONG_PROXY_ERROR_LOG=/dev/stderr \
+  -e KONG_ADMIN_ERROR_LOG=/dev/stderr \
+  -e KONG_LOG_LEVEL=notice \
+  -e KONG_NGINX_PROXY_REAL_IP_HEADER=X-Real-IP \
   -e KONG_PLUGINS=bundled,nonamesecurity \
   kong-noname:3.9.4
 ```
@@ -206,14 +212,15 @@ What the main options do:
 | Option | What it does |
 | --- | --- |
 | `--restart unless-stopped` | Docker starts Kong again after a crash or reboot |
-| `-p 80:8000` | Traffic to port 80 on the host goes to Kong's proxy |
+| `-p 80:8000`, `-p 8000:8000` | Traffic to port 80 or 8000 on the host goes to Kong's proxy |
 | `-p 8001:8001` | Kong's Admin API, used for the checks in Step 10 |
 | `-v /opt/kong/kong.yml:...` | Gives the container your `kong.yml` (read-only) |
+| `KONG_*_LOG` | Sends Kong's logs to `docker logs` (access logs to stdout, errors to stderr) |
 | `KONG_DATABASE=off` | Kong reads its config from `kong.yml`, not a database |
 | `KONG_PLUGINS=bundled,nonamesecurity` | Turns on Kong's built-in plugins plus NoName. Keep `bundled`, or plugins like rate-limiting stop working. |
 | `kong-noname:3.9.4` | The new image you built in Step 5 |
 
-If your old container used other ports or `-e` settings, look for them in `~/kong-before.json` (under `Env` and `PortBindings`) and add them to the script.
+This script matches the original container on this host. If your old container used other ports or `-e` settings, look for them in `~/kong-before.json` (under `Env` and `PortBindings`) and add them to the script.
 
 ## Step 9: Restart Kong on the new image (Kong host)
 
@@ -240,10 +247,10 @@ curl -s localhost:8001/plugins/enabled
 The list should include `nonamesecurity`.
 
 ```bash
-sudo docker logs kong | grep NONAME
+sudo docker logs kong 2>&1 | grep NONAME
 ```
 
-No output is good: the plugin only logs when something goes wrong.
+No output is good: the plugin only logs when something goes wrong. The `2>&1` matters, because Kong writes errors to stderr and a plain `| grep` never sees them.
 
 Finally, send some traffic through Kong and check that it shows up in the API Security UI. The first API can take a few minutes to appear.
 
@@ -282,7 +289,7 @@ sudo /opt/kong/run-kong.sh
 
 | Problem | What to check |
 | --- | --- |
-| `docker build` says `COPY failed` | `/opt/kong/build/nonamesecurity` is empty. Redo Step 3. |
+| `docker build` says `COPY failed`, or the Step 5 `ls` is empty | `/opt/kong/build/nonamesecurity` is empty. Redo Step 3 and confirm its `ls` shows six files. |
 | `pull access denied for kong-noname` | The image was never built. Redo Step 5 and read the error. |
 | Step 7 says `no configuration schema found for plugin: nonamesecurity` | The plugin files are nested too deep in the image. Redo Step 3 (including the `rm -rf`), then rebuild with `sudo docker build --no-cache -t kong-noname:3.9.4 .` |
 | Step 7 shows a YAML error | Indentation in `kong.yml` is off. See Step 6. |
