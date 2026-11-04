@@ -2,7 +2,7 @@
 
 Nov 3, 2026
 
-Kong runs in Docker on the stock `kong:3.6` image. We build a new image, `kong-noname:3.6`, which is the same Kong with the NoName plugin files added. Then we turn the plugin on in `kong.yml` and restart Kong on the new image.
+Kong runs in Docker on the stock `kong:3.9.4` image. We build a new image, `kong-noname:3.9.4`, which is the same Kong with the NoName plugin files added. Then we turn the plugin on in `kong.yml` and restart Kong on the new image.
 
 ## Before you start
 
@@ -60,7 +60,7 @@ sudo vi /opt/kong/build/Dockerfile
 Press `i`, type these four lines, then press Esc and type `:wq` to save:
 
 ```
-FROM kong:3.6
+FROM kong:3.9.4
 USER root
 COPY nonamesecurity /usr/local/share/lua/5.1/kong/plugins/nonamesecurity
 USER kong
@@ -68,7 +68,7 @@ USER kong
 
 What each line does:
 
-- `FROM kong:3.6` starts from the stock Kong image.
+- `FROM kong:3.9.4` starts from the stock Kong image.
 - `USER root` switches to root so the files can be copied in.
 - `COPY ...` copies the plugin folder to where Kong looks for plugins.
 - `USER kong` switches back to the normal Kong user.
@@ -77,15 +77,15 @@ What each line does:
 
 ```bash
 cd /opt/kong/build
-sudo docker build -t kong-noname:3.6 .
+sudo docker build -t kong-noname:3.9.4 .
 ```
 
-`-t kong-noname:3.6` names the new image. The `.` at the end means build from the current folder.
+`-t kong-noname:3.9.4` names the new image. The `.` at the end means build from the current folder.
 
 Check that the plugin made it into the image:
 
 ```bash
-sudo docker run --rm kong-noname:3.6 ls /usr/local/share/lua/5.1/kong/plugins/nonamesecurity
+sudo docker run --rm kong-noname:3.9.4 ls /usr/local/share/lua/5.1/kong/plugins/nonamesecurity
 ```
 
 This starts a throwaway container, lists the plugin folder, then deletes the container. You should see `handler.lua` and `schema.lua`. Your running Kong isn't touched.
@@ -145,7 +145,7 @@ sudo chmod a+r /opt/kong/kong.yml
 This starts a throwaway Kong from the new image and asks it to read `kong.yml`. It catches mistakes before you restart the real Kong.
 
 ```bash
-sudo docker run --rm -v /opt/kong/kong.yml:/k.yml:ro -e KONG_DATABASE=off -e KONG_PLUGINS=bundled,nonamesecurity kong-noname:3.6 kong config parse /k.yml
+sudo docker run --rm -v /opt/kong/kong.yml:/k.yml:ro -e KONG_DATABASE=off -e KONG_PLUGINS=bundled,nonamesecurity kong-noname:3.9.4 kong config parse /k.yml
 ```
 
 It should end with `parse successful`. A `ulimit` warning above it is normal. If you get an error, fix `kong.yml` and run the check again.
@@ -192,7 +192,7 @@ docker run -d --name kong \
   -e KONG_PROXY_LISTEN=0.0.0.0:8000 \
   -e KONG_ADMIN_LISTEN=0.0.0.0:8001 \
   -e KONG_PLUGINS=bundled,nonamesecurity \
-  kong-noname:3.6
+  kong-noname:3.9.4
 ```
 
 Make it runnable:
@@ -211,7 +211,7 @@ What the main options do:
 | `-v /opt/kong/kong.yml:...` | Gives the container your `kong.yml` (read-only) |
 | `KONG_DATABASE=off` | Kong reads its config from `kong.yml`, not a database |
 | `KONG_PLUGINS=bundled,nonamesecurity` | Turns on Kong's built-in plugins plus NoName. Keep `bundled`, or plugins like rate-limiting stop working. |
-| `kong-noname:3.6` | The new image you built in Step 5 |
+| `kong-noname:3.9.4` | The new image you built in Step 5 |
 
 If your old container used other ports or `-e` settings, look for them in `~/kong-before.json` (under `Env` and `PortBindings`) and add them to the script.
 
@@ -231,7 +231,7 @@ Wait about 10 seconds, then:
 sudo docker ps
 ```
 
-The `kong` line should show image `kong-noname:3.6` and status `Up`.
+The `kong` line should show image `kong-noname:3.9.4` and status `Up`.
 
 ```bash
 curl -s localhost:8001/plugins/enabled
@@ -272,7 +272,7 @@ sudo chmod a+r /opt/kong/kong.yml
 sudo vi /opt/kong/run-kong.sh
 ```
 
-In the script, change `kong-noname:3.6` to `kong:3.6`, and `KONG_PLUGINS=bundled,nonamesecurity` to `KONG_PLUGINS=bundled`. Save, then run:
+In the script, change `kong-noname:3.9.4` to `kong:3.9.4`, and `KONG_PLUGINS=bundled,nonamesecurity` to `KONG_PLUGINS=bundled`. Save, then run:
 
 ```bash
 sudo /opt/kong/run-kong.sh
@@ -284,7 +284,7 @@ sudo /opt/kong/run-kong.sh
 | --- | --- |
 | `docker build` says `COPY failed` | `/opt/kong/build/nonamesecurity` is empty. Redo Step 3. |
 | `pull access denied for kong-noname` | The image was never built. Redo Step 5 and read the error. |
-| Step 7 says `no configuration schema found for plugin: nonamesecurity` | The plugin files are nested too deep in the image. Redo Step 3 (including the `rm -rf`), then rebuild with `sudo docker build --no-cache -t kong-noname:3.6 .` |
+| Step 7 says `no configuration schema found for plugin: nonamesecurity` | The plugin files are nested too deep in the image. Redo Step 3 (including the `rm -rf`), then rebuild with `sudo docker build --no-cache -t kong-noname:3.9.4 .` |
 | Step 7 shows a YAML error | Indentation in `kong.yml` is off. See Step 6. |
 | Kong keeps restarting | Run `sudo docker logs kong`. Usually a `kong.yml` mistake, or the file isn't readable (`sudo chmod a+r /opt/kong/kong.yml`). |
 | Rate limiting stopped working | `bundled` is missing from `KONG_PLUGINS` in the script. |
