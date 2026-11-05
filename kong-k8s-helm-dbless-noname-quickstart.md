@@ -9,6 +9,12 @@ This guide is self-contained: the two files it needs (`kong.yml` and `values-non
 
 Prerequisites: `kubectl` pointed at the cluster, `helm` v3, and the cluster able to reach the API Security engine URL (outbound HTTPS).
 
+**On k3s:** `kubectl` is the k3s binary and reads `/etc/rancher/k3s/k3s.yaml` on its own, but `helm` doesn't. Without the line below, `helm install` fails with `Kubernetes cluster unreachable: Get "http://localhost:8080/version"`. Set it once (and add it to `~/.bashrc`):
+
+```bash
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+```
+
 **Where to run the commands.** Run everything on the machine where you use `kubectl` and `helm`, from one working folder:
 
 ```bash
@@ -34,22 +40,24 @@ noname-security-kong-policy/kong/plugins/nonamesecurity/
 ├── configuration.lua ├── prevention.lua  └── utils.lua
 ```
 
-`schema.lua` comes pre-filled for this profile (engine URL, source index, source key). Use this copy, never a generic one. Check it:
+`schema.lua` comes pre-filled for this profile (engine URL, source index, source key). Use this copy, never a generic one. Check it (the key is masked so it doesn't land in your terminal scrollback):
 
 ```bash
-grep -E "NN_ENGINE_URL|NN_SOURCE_KEY" noname-security-kong-policy/kong/plugins/nonamesecurity/schema.lua
+grep -E "NN_ENGINE_URL|NN_SOURCE_INDEX|NN_SOURCE_KEY|NN_VERSION" \
+  noname-security-kong-policy/kong/plugins/nonamesecurity/schema.lua \
+  | sed -E 's/(NN_SOURCE_KEY.*default = ")[^"]*/\1<hidden>/'
 ```
 
 ## Step 2: Install the code (plugin ConfigMap)
 
-Create the namespace and load the plugin's Lua files into a ConfigMap:
+Create the namespace (this form doesn't fail if `kong` already exists) and load the plugin's Lua files into a ConfigMap. `--save-config` lets the later `kubectl apply` updates run without a `missing the last-applied-configuration annotation` warning:
 
 ```bash
-kubectl create namespace kong
+kubectl create namespace kong --dry-run=client -o yaml | kubectl apply -f -
 
 cd noname-security-kong-policy/kong/plugins
 kubectl create configmap kong-plugin-nonamesecurity \
-  --from-file=nonamesecurity -n kong
+  --from-file=nonamesecurity -n kong --save-config
 cd -
 ```
 
@@ -59,7 +67,7 @@ Verify all six `.lua` files are keys in the ConfigMap:
 kubectl get configmap kong-plugin-nonamesecurity -n kong -o jsonpath='{.data}' | tr ',' '\n' | grep -o '"[a-z_]*\.lua"'
 ```
 
-The plugin folder is flat (no subdirectories), so a single ConfigMap holds it. The chart mounts it at `/opt/kong/plugins/nonamesecurity` and sets `KONG_LUA_PACKAGE_PATH` so Kong finds it.
+The plugin folder is flat (no subdirectories), so a single ConfigMap holds it. The ConfigMap contains the source key in plaintext: anyone who can read ConfigMaps in the `kong` namespace can read it. The chart mounts it at `/opt/kong/plugins/nonamesecurity` and sets `KONG_LUA_PACKAGE_PATH` so Kong finds it.
 
 ## Step 3: Associate the plugin (DB-less: `kong.yml` ConfigMap)
 
@@ -130,7 +138,7 @@ Load it as a ConfigMap. The chart requires the key to be **`kong.yml`**:
 
 ```bash
 kubectl create configmap kong-dbless-config \
-  --from-file=kong.yml=kong.yml -n kong
+  --from-file=kong.yml=kong.yml -n kong --save-config
 ```
 
 Both ConfigMaps (Steps 2 and 3) must exist **before** the Helm install, or the pod can't start.
@@ -143,7 +151,7 @@ Create `values-noname.yaml` (this command writes the file):
 cat > values-noname.yaml <<'EOF'
 image:
   repository: kong
-  tag: "3.6"            # match the Kong version you want to run
+  tag: "3.9.4"          # match the Kong version you want to run
 
 replicaCount: 1         # single Kong instance
 
@@ -184,14 +192,19 @@ Install:
 ```bash
 helm repo add kong https://charts.konghq.com
 helm repo update
-helm install kong kong/kong -n kong -f values-noname.yaml
+helm install kong kong/kong -n kong -f values-noname.yaml --version 3.4.1
+kubectl rollout status deploy/kong-kong -n kong
 ```
+
+`--version 3.4.1` pins the chart (tested with Kong 3.9.4). Use the same `--version` on every `helm upgrade`.
+
+> **k3s ServiceLB note:** k3s's built-in LoadBalancer gives each port (`:80`, `:443`) on a node to one Service only. If another Kong (or anything else) already has a LoadBalancer on those ports, this one stays `<pending>`. Set `proxy.type: NodePort` instead and use `<node-ip>:<nodePort>`.
 
 ## Step 5: Verify
 
 ```bash
 kubectl get pods -n kong
-kubectl logs deploy/kong-kong -n kong -c proxy | tail -20
+kubectl logs deploy/kong-kong -n kong -c proxy | grep -E "\[(error|crit|alert|emerg)\]|NONAME" || echo "no errors"
 
 kubectl exec deploy/kong-kong -n kong -c proxy -- printenv KONG_PLUGINS
 #   bundled,nonamesecurity
@@ -202,6 +215,8 @@ curl -s localhost:8001/plugins/enabled | grep nonamesecurity
 curl -s localhost:8001/plugins | grep -o '"name":"nonamesecurity"'
 ```
 
+On Kong 3.9 the log is full of `rate-limiting: config.redis_* is deprecated` warnings. They come from the plugin's built-in defaults, not from `kong.yml`, and are harmless, which is why the command above filters for errors only.
+
 Get the proxy address and send traffic:
 
 ```bash
@@ -209,7 +224,7 @@ kubectl get svc kong-kong-proxy -n kong
 curl -H "Host: crapi.cropseyit.com" http://<EXTERNAL-IP-or-NODE:PORT>/
 ```
 
-Then confirm the traffic shows up in the API Security UI.
+Then confirm the traffic shows up in the API Security UI. A healthy plugin logs nothing; see *Proving records are sent* below for checking from the cluster side.
 
 ---
 
@@ -253,6 +268,7 @@ The chart only adds a config checksum (automatic restart) when the config is inl
    kubectl rollout restart deploy/kong-kong -n kong
    kubectl rollout status deploy/kong-kong -n kong
    ```
+   Give the old pod a few seconds to finish terminating before you run `kubectl exec`/`logs deploy/kong-kong`. While both pods exist, kubectl may pick the old one (`Found 2 pods, using pod/...`).
 4. Confirm: `kubectl exec deploy/kong-kong -n kong -c proxy -- grep NN_VERSION /opt/kong/plugins/nonamesecurity/schema.lua`
 
 No re-association needed; the `kong.yml` entry stays as is.
@@ -286,7 +302,7 @@ kubectl rollout restart deploy/kong-kong -n kong
    kubectl create configmap kong-dbless-config \
      --from-file=kong.yml=kong.yml -n kong \
      --dry-run=client -o yaml | kubectl apply -f -
-   helm upgrade kong kong/kong -n kong -f values-noname.yaml
+   helm upgrade kong kong/kong -n kong -f values-noname.yaml --version 3.4.1
    kubectl delete configmap kong-plugin-nonamesecurity -n kong
    ```
    (Or remove Kong entirely: `helm uninstall kong -n kong`.)
@@ -303,14 +319,30 @@ kubectl rollout restart deploy/kong-kong -n kong
 | `plugin 'nonamesecurity' not found` / not enabled | Check `printenv KONG_PLUGINS` and `ls /opt/kong/plugins/nonamesecurity` in the pod (Step 5). If empty, `plugins.configMaps` in the values doesn't match the ConfigMap name. |
 | Kong uses an empty/default config | `ingressController.enabled` is still true, or `env.database` isn't `"off"`. The chart mounts `kong.yml` only when both are set. |
 | Edited `kong.yml` or `schema.lua`, nothing changed | Update the ConfigMap **and** `kubectl rollout restart deploy/kong-kong -n kong`. |
-| Loads fine, nothing in the UI | Plugin entry missing from `kong.yml`, or the pod can't reach the engine: `kubectl exec deploy/kong-kong -n kong -c proxy -- curl -sS -o /dev/null -w '%{http_code}\n' https://michaelc-lab.nonamesec.com/engine` (check egress NetworkPolicies / proxies). |
-| No `[NONAME]` log lines | Needs **both** `NN_DEBUG_ENABLED = true` in `schema.lua` (update the ConfigMap) **and** `env.log_level: info` in `values-noname.yaml` (`helm upgrade`). Then `kubectl logs -f deploy/kong-kong -n kong -c proxy \| grep NONAME`. |
+| Loads fine, nothing in the UI | Plugin entry missing from `kong.yml` (`curl -s localhost:8001/plugins` via the port-forward), or the cluster can't reach the engine. The `kong` image has **no curl**, so test from a throwaway pod: `kubectl run nn-egress-test -n kong --rm -i --restart=Never --image=curlimages/curl --command -- curl -sS -o /dev/null -w '%{http_code}\n' https://<your-engine-host>/engine` (expect `200`; otherwise check egress NetworkPolicies / proxies). Then see *Proving records are sent*. |
+| `[NONAME] Failed to connect to ...` / `returned with an error. Status code: ...` | Engine unreachable or rejecting the records (for example a wrong or rotated source key: re-download the zip). These errors are always logged at `error` level, whatever `NN_DEBUG_ENABLED` is set to. |
+| No `[NONAME]` log lines | **Normal.** Plugin 5.0.1 logs only problems. `NN_DEBUG_ENABLED = true` adds messages for anomalies (blocked requests, duplicate headers, oversized bodies) and logs nothing for successful sends. To see sends, use *Proving records are sent*. |
+
+### Proving records are sent
+
+Temporarily run Kong at `debug` log level (the plugin's batch queue logs at `debug`), send a few requests, and look for batches going to the engine:
+
+```bash
+helm upgrade kong kong/kong -n kong -f values-noname.yaml --version 3.4.1 --set env.log_level=debug
+kubectl rollout status deploy/kong-kong -n kong; sleep 20      # let the old pod terminate
+for i in 1 2 3 4 5 6; do curl -s -o /dev/null -H "Host: crapi.cropseyit.com" http://<proxy-address>/; done; sleep 5
+kubectl logs deploy/kong-kong -n kong -c proxy --since=1m | grep -E "batch_queue|nonamesec.com|NONAME"
+```
+
+A good result has `queueing batch for processing (6 entries)` followed by a connection to your engine host, and **no** `[NONAME] ... error` line. Switch back by re-running the same `helm upgrade` **without** `--set env.log_level=debug`, because debug logging is very noisy.
 
 ---
 
 ## Notes
 
 **Why a ConfigMap instead of a custom image.** This is the method the Helm article documents. The stock `kong` image is used unchanged and the plugin travels with the cluster config. Building a custom image (like the Docker guide) also works with Helm: set `image.repository/tag` to your image, drop `plugins.configMaps`, and add `plugins.preInstalled: nonamesecurity`.
+
+**Source key exposure.** `schema.lua` (and so the plugin ConfigMap) holds the source key. Don't commit it, don't put it in a shared or public chart/values repo, and limit who can read ConfigMaps in `kong`.
 
 **Single instance.** `replicaCount: 1` gives exactly one Kong pod. Each Kong pod runs its own copy of the plugin and batches its own traffic, so scaling up later needs no Noname changes.
 
